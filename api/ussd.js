@@ -1,54 +1,88 @@
-const africastalking = require("africastalking")({
-  apiKey: process.env.AT_API_KEY,
-  username: "sandbox"
-});
-const sms = africastalking.SMS;
-const connectToDB = require("../lib/mongo");
+import { MongoClient } from "mongodb";
+import africastalking from "africastalking";
 
-module.exports = async (req, res) => {
-  const { phoneNumber, text } = req.body || {};
-  const db = await connectToDB();
+const AT = africastalking({
+  apiKey: process.env.AT_API_KEY,
+  username: process.env.AT_USERNAME,
+});
+
+const sms = AT.SMS;
+const client = new MongoClient(process.env.MONGO_URI);
+const dbName = "luckyGame";
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).send("Method Not Allowed");
+  }
+
+  const { sessionId, serviceCode, phoneNumber, text } = req.body;
+
+  await client.connect();
+  const db = client.db(dbName);
   const players = db.collection("players");
 
   let response = "";
 
-  if (!text || text === "") {
-    response = "CON Pick a number (1 - 7)\n98. View Scoreboard";
+  if (text === "") {
+    // Home menu
+    response = `CON Welcome to Lucky 7 🎲
+Pick a number (1-7):
+98. Leaderboard`;
+  } else if (/^[1-7]$/.test(text)) {
+    // Game logic
+    const userChoice = parseInt(text, 10);
+    const systemChoice = Math.floor(Math.random() * 7) + 1;
+    const win = userChoice === systemChoice;
+
+    // Update stats
+    await players.updateOne(
+      { phone: phoneNumber },
+      { $inc: win ? { wins: 1 } : { losses: 1 } },
+      { upsert: true }
+    );
+
+    // Send SMS
+    const message = win
+      ? `🎉 You WON! You picked ${userChoice}, system picked ${systemChoice}.`
+      : `😢 You lost! You picked ${userChoice}, system picked ${systemChoice}.`;
+    await sms.send({ to: phoneNumber, message, from: process.env.AT_SHORTCODE });
+
+    response = `END Game over! Full results sent by SMS 📩`;
   } else if (text === "98") {
-    // fetch stats
-    const player = await players.findOne({ phone: phoneNumber });
-    const wins = player?.wins || 0;
-    const losses = player?.losses || 0;
-    response = `END Your Stats:\nWins: ${wins}\nLosses: ${losses}`;
-  } else {
-    const userChoice = parseInt(text.trim(), 10);
-    if (userChoice >= 1 && userChoice <= 7) {
-      const systemChoice = Math.floor(Math.random() * 7) + 1;
-      let result;
+    // Global leaderboard
+    const topPlayers = await players
+      .find({})
+      .sort({ wins: -1, losses: 1 })
+      .limit(5)
+      .toArray();
 
-      if (userChoice === systemChoice) {
-        result = `🎉 You WIN! You chose ${userChoice}, system chose ${systemChoice}.`;
-        await players.updateOne(
-          { phone: phoneNumber },
-          { $inc: { wins: 1 } },
-          { upsert: true }
-        );
-      } else {
-        result = `😢 You LOSE. You chose ${userChoice}, system chose ${systemChoice}.`;
-        await players.updateOne(
-          { phone: phoneNumber },
-          { $inc: { losses: 1 } },
-          { upsert: true }
-        );
-      }
+    let scoreboard = "🏆 Top Players 🏆\n";
+    topPlayers.forEach((p, i) => {
+      let label = `${i + 1}. ${p.phone.slice(-4)} - W:${p.wins || 0} L:${p.losses || 0}`;
+      if (p.phone === phoneNumber) label += " ⭐YOU";
+      scoreboard += label + "\n";
+    });
 
-      await sms.send({ to: [phoneNumber], message: result, from: 'Rapha Bet' });
-      response = "END Your result has been sent via SMS.";
+    response = `CON ${scoreboard}\n99. My Rank`;
+  } else if (text === "98*99") {
+    // Show player's rank
+    const sortedPlayers = await players
+      .find({})
+      .sort({ wins: -1, losses: 1 })
+      .toArray();
+
+    const rank = sortedPlayers.findIndex(p => p.phone === phoneNumber) + 1;
+    const me = sortedPlayers.find(p => p.phone === phoneNumber);
+
+    if (rank > 0) {
+      response = `END Your Rank: ${rank}/${sortedPlayers.length}\nW:${me.wins || 0} L:${me.losses || 0}`;
     } else {
-      response = "END Invalid choice. Pick between 1 - 7.";
+      response = `END You haven't played yet!`;
     }
+  } else {
+    response = "END Invalid choice. Try again.";
   }
 
-  res.setHeader("Content-Type", "text/plain");
+  res.set("Content-Type", "text/plain");
   res.send(response);
-};
+}

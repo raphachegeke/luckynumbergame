@@ -12,7 +12,9 @@ const dbName = "luckyGame";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).send("Method Not Allowed");
+    res.statusCode = 405;
+    res.end("Method Not Allowed");
+    return;
   }
 
   const { sessionId, serviceCode, phoneNumber, text } = req.body;
@@ -23,66 +25,67 @@ export default async function handler(req, res) {
 
   let response = "";
 
-  if (text === "") {
-    // Home menu
-    response = `CON Welcome to Lucky 7 🎲
+  try {
+    if (!text || text === "") {
+      response = `CON Welcome to Lucky 7 🎲
 Pick a number (1-7):
 98. Leaderboard`;
-  } else if (/^[1-7]$/.test(text)) {
-    // Game logic
-    const userChoice = parseInt(text, 10);
-    const systemChoice = Math.floor(Math.random() * 7) + 1;
-    const win = userChoice === systemChoice;
+    } else if (/^[1-7]$/.test(text)) {
+      const userChoice = parseInt(text, 10);
+      const systemChoice = Math.floor(Math.random() * 7) + 1;
+      const win = userChoice === systemChoice;
 
-    // Update stats
-    await players.updateOne(
-      { phone: phoneNumber },
-      { $inc: win ? { wins: 1 } : { losses: 1 } },
-      { upsert: true }
-    );
+      await players.updateOne(
+        { phone: phoneNumber },
+        { $inc: win ? { wins: 1 } : { losses: 1 } },
+        { upsert: true }
+      );
 
-    // Send SMS
-    const message = win
-      ? `🎉 You WON! You picked ${userChoice}, system picked ${systemChoice}.`
-      : `😢 You lost! You picked ${userChoice}, system picked ${systemChoice}.`;
-    await sms.send({ to: phoneNumber, message, from: process.env.AT_SHORTCODE });
+      const message = win
+        ? `🎉 You WON! You picked ${userChoice}, system picked ${systemChoice}.`
+        : `😢 You lost! You picked ${userChoice}, system picked ${systemChoice}.`;
 
-    response = `END Game over! Full results sent by SMS 📩`;
-  } else if (text === "98") {
-    // Global leaderboard
-    const topPlayers = await players
-      .find({})
-      .sort({ wins: -1, losses: 1 })
-      .limit(5)
-      .toArray();
+      await sms.send({ to: phoneNumber, message, from: process.env.AT_SHORTCODE });
 
-    let scoreboard = "🏆 Top Players 🏆\n";
-    topPlayers.forEach((p, i) => {
-      let label = `${i + 1}. ${p.phone.slice(-4)} - W:${p.wins || 0} L:${p.losses || 0}`;
-      if (p.phone === phoneNumber) label += " ⭐YOU";
-      scoreboard += label + "\n";
-    });
+      response = `END Game over! Full results sent by SMS 📩`;
+    } else if (text === "98") {
+      const topPlayers = await players
+        .find({})
+        .sort({ wins: -1, losses: 1 })
+        .limit(5)
+        .toArray();
 
-    response = `CON ${scoreboard}\n99. My Rank`;
-  } else if (text === "98*99") {
-    // Show player's rank
-    const sortedPlayers = await players
-      .find({})
-      .sort({ wins: -1, losses: 1 })
-      .toArray();
+      let scoreboard = "🏆 Top Players 🏆\n";
+      topPlayers.forEach((p, i) => {
+        let label = `${i + 1}. ${p.phone.slice(-4)} - W:${p.wins || 0} L:${p.losses || 0}`;
+        if (p.phone === phoneNumber) label += " ⭐YOU";
+        scoreboard += label + "\n";
+      });
 
-    const rank = sortedPlayers.findIndex(p => p.phone === phoneNumber) + 1;
-    const me = sortedPlayers.find(p => p.phone === phoneNumber);
+      response = `CON ${scoreboard}\n99. My Rank`;
+    } else if (text === "98*99") {
+      const sortedPlayers = await players
+        .find({})
+        .sort({ wins: -1, losses: 1 })
+        .toArray();
 
-    if (rank > 0) {
-      response = `END Your Rank: ${rank}/${sortedPlayers.length}\nW:${me.wins || 0} L:${me.losses || 0}`;
+      const rank = sortedPlayers.findIndex(p => p.phone === phoneNumber) + 1;
+      const me = sortedPlayers.find(p => p.phone === phoneNumber);
+
+      if (rank > 0) {
+        response = `END Your Rank: ${rank}/${sortedPlayers.length}\nW:${me.wins || 0} L:${me.losses || 0}`;
+      } else {
+        response = `END You haven't played yet!`;
+      }
     } else {
-      response = `END You haven't played yet!`;
+      response = "END Invalid choice. Try again.";
     }
-  } else {
-    response = "END Invalid choice. Try again.";
-  }
 
-  res.set("Content-Type", "text/plain");
-  res.send(response);
+    res.setHeader("Content-Type", "text/plain");
+    res.end(response);
+  } catch (err) {
+    console.error("USSD Handler Error:", err);
+    res.statusCode = 500;
+    res.end("END Internal Server Error");
+  }
 }

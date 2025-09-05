@@ -42,7 +42,7 @@ module.exports = async (req, res) => {
         );
       }
 
-      await sms.send({ to: [phoneNumber], message: result });
+      await sms.send({ to: [phoneNumber], message: result, from: 'Rapha Bet' });
       response = "END Your result has been sent via SMS.";
     } else {
       response = "END Invalid choice. Pick between 1 - 7.";

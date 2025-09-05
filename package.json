@@ -2,6 +2,7 @@
   "name": "ussd-game",
   "version": "1.0.0",
   "dependencies": {
-    "africastalking": "^0.7.4"
+    "africastalking": "^0.7.4",
+     "mongodb": "^6.8.0"
   }
 }
